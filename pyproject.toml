@@ -1,0 +1,32 @@
+[project]
+name = "mcp-plotly"
+version = "0.1.0"
+description = "MCP server for generating Plotly visualizations in isolated Podman containers"
+readme = "README.md"
+authors = [
+    { name = "Nick Farrell", email = "nick.farrell@aiven.io" }
+]
+license = "MIT"
+requires-python = ">=3.13"
+dependencies = [
+    "mcp[cli]",
+]
+
+[project.scripts]
+mcp-plotly = "mcp_plotly.server:main"
+
+[build-system]
+requires = ["uv_build>=0.11.2,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.5.1",
+    "pytest",
+    "pytest-asyncio",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "e2e: end-to-end tests that require a running Podman installation",
+]
