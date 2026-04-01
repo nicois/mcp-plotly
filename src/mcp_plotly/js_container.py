@@ -113,16 +113,16 @@ function renderObservable(code) {
     // where Array.isArray() etc. break across VM context boundaries.
     // Security isolation is already provided by the Podman container.
     const { document } = new JSDOM('<!DOCTYPE html><html><body></body></html>').window;
-    // Wrap the user's code so the last expression is returned automatically.
-    // Using indirect eval via (0, eval)() to handle multiline expressions correctly,
-    // since naive last-line wrapping breaks on expressions spanning multiple lines.
-    const wrapper = `
-        return (function(Plot, document) {
-            return eval(${JSON.stringify(code)});
-        })
-    `;
-    const factory = new Function(wrapper);
-    const fn = factory();
+    // Insert "return" before the last Plot.plot() call so it works with
+    // both single-line and multiline expressions (unlike last-line splitting).
+    // We avoid eval() because Observable Plot internally uses new Function()
+    // to compile accessors, and those lose access to Plot's module scope in eval.
+    const idx = code.lastIndexOf('Plot.plot(');
+    if (idx === -1) {
+        throw new Error('Code must contain a Plot.plot() call as the final expression.');
+    }
+    const body = code.slice(0, idx) + 'return ' + code.slice(idx);
+    const fn = new Function('Plot', 'document', body);
     const result = fn(Plot, document);
     if (!result) {
         throw new Error(
