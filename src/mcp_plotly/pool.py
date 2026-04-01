@@ -160,12 +160,25 @@ class ContainerPool:
             self._hot_lock = asyncio.Lock()
         return self._hot_lock
 
+    async def _kill_orphans(self) -> None:
+        """Kill any containers left over from a previous server run."""
+        rc, stdout, _ = await _run_cmd(
+            ["podman", "ps", "-q", f"--filter=label=mcp-plotly={self.image_name}"],
+        )
+        if rc == 0 and stdout.strip():
+            ids = stdout.strip().split()
+            logger.info(
+                "Killing %d orphaned container(s) for '%s'", len(ids), self.image_name
+            )
+            await _run_cmd(["podman", "kill", *ids])
+
     async def ensure_image(self) -> None:
         """Build the container image if it doesn't already exist.
 
         Uses a lock to prevent concurrent builds from racing.
         """
         async with self._get_image_lock():
+            await self._kill_orphans()
             rc, _, _ = await _run_cmd(["podman", "image", "exists", self.image_name])
             if rc == 0:
                 logger.debug("Container image '%s' already exists", self.image_name)
@@ -241,6 +254,7 @@ class ContainerPool:
             "/root",
             "--network=none",
             f"--memory={DEFAULT_MEMORY}",
+            f"--label=mcp-plotly={self.image_name}",
             "-v",
             f"{script_path}:/work/{self.script_filename}:ro,z",
             "-v",
