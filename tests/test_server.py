@@ -14,4 +14,5 @@ async def test_server_has_tools():
         "create_plotly_plot",
         "create_vegalite_plot",
         "create_observable_plot",
+        "revise_plot",
     }

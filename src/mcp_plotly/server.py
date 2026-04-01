@@ -1,5 +1,6 @@
 """MCP server for generating visualizations in isolated containers."""
 
+import hashlib
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -16,7 +17,7 @@ from mcp_plotly.js_container import (
     run_vegalite,
     shutdown_js,
 )
-from mcp_plotly.pool import PlotResult, file_location
+from mcp_plotly.pool import PlotResult, file_location, get_output_base_dir
 
 logger = logging.getLogger(__name__)
 
@@ -41,11 +42,13 @@ mcp = FastMCP(
     "mcp-plotly",
     instructions=(
         "Generate data visualizations in isolated containers. "
-        "Tools return URLs to generated image files (PNG, SVG). "
-        "After a successful plot, you MUST display the PNG or SVG image inline to the user "
+        "Tools return URLs to generated image files (PNG). "
+        "After a successful plot, you MUST display the PNG image inline to the user "
         "using markdown: ![Plot description](THE_URL_FROM_THE_RESULT). "
         "Extract the image URL from the tool result and embed it. "
-        "NEVER show just a link or raw URL — the user expects to see the chart directly."
+        "NEVER show just a link or raw URL — the user expects to see the chart directly. "
+        "Each result includes a Reference ID. To fix or modify a plot, use revise_plot "
+        "with the reference and the complete updated code instead of re-calling the original tool."
     ),
     lifespan=lifespan,
 )
@@ -65,7 +68,37 @@ def _format_size(size: int) -> str:
     return f"{size / (1024 * 1024):.1f} MB"
 
 
-def _format_result(result: PlotResult, tool_name: str = "Plot") -> str:
+def _compute_ref(code: str) -> str:
+    """Return first 12 hex chars of sha256 of the code string."""
+    return hashlib.sha256(code.encode()).hexdigest()[:12]
+
+
+def _save_metadata(output_dir: str, tool_type: str, code: str, ref: str) -> None:
+    """Write _meta.json into the output directory."""
+    meta_path = Path(output_dir) / "_meta.json"
+    meta_path.write_text(json.dumps({"tool_type": tool_type, "code": code, "ref": ref}))
+
+
+def _lookup_by_ref(ref: str) -> dict | None:
+    """Scan output directories for a _meta.json matching the given ref."""
+    base_dir = get_output_base_dir()
+    if not base_dir.exists():
+        return None
+    for entry in sorted(base_dir.iterdir(), reverse=True):
+        meta_path = entry / "_meta.json"
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text())
+                if meta.get("ref") == ref:
+                    return meta
+            except (json.JSONDecodeError, OSError):
+                continue
+    return None
+
+
+def _format_result(
+    result: PlotResult, tool_name: str = "Plot", ref: str | None = None
+) -> str:
     """Format a successful or failed PlotResult into a tool response string."""
     if not result.success:
         logger.error("%s generation failed (stderr=%s)", tool_name, result.stderr)
@@ -81,13 +114,16 @@ def _format_result(result: PlotResult, tool_name: str = "Plot") -> str:
             fmt = format_names.get(suffix, suffix)
             size = _format_size(path.stat().st_size)
             file_lines.append(f"  - {file_location(f)} ({fmt}, {size})")
+        ref_line = f"\nReference: {ref}" if ref else ""
         return (
             "Plot generated successfully.\n\n"
             "Files:\n" + "\n".join(file_lines) + "\n\n"
-            f"Output directory: {file_location(result.output_dir)}"
+            f"Output directory: {file_location(result.output_dir)}" + ref_line
         )
 
     parts = ["Plot generation failed."]
+    if ref:
+        parts.append(f"\nReference: {ref}")
     if result.stderr:
         parts.append(f"\nStderr:\n{result.stderr}")
     if result.stdout:
@@ -132,7 +168,9 @@ async def create_plotly_plot(
         output_format=output_format.value,
         timeout=timeout,
     )
-    return _format_result(result, "Plotly")
+    ref = _compute_ref(code)
+    _save_metadata(result.output_dir, "plotly", code, ref)
+    return _format_result(result, "Plotly", ref=ref)
 
 
 @mcp.tool()
@@ -175,7 +213,9 @@ async def create_vegalite_plot(
         output_format="png",
         timeout=timeout,
     )
-    return _format_result(result, "Vega-Lite")
+    ref = _compute_ref(spec)
+    _save_metadata(result.output_dir, "vegalite", spec, ref)
+    return _format_result(result, "Vega-Lite", ref=ref)
 
 
 @mcp.tool()
@@ -225,7 +265,70 @@ async def create_observable_plot(
         output_format="png",
         timeout=timeout,
     )
-    return _format_result(result, "Observable Plot")
+    ref = _compute_ref(code)
+    _save_metadata(result.output_dir, "observable", code, ref)
+    return _format_result(result, "Observable Plot", ref=ref)
+
+
+@mcp.tool()
+async def revise_plot(
+    previous_ref: str,
+    new_code: str,
+    timeout: int = 60,
+) -> str:
+    """Revise a previously submitted plot by providing updated code.
+
+    Use this when you need to fix or modify a plot you already created.
+    Provide the reference ID from a previous plot result and the complete
+    new code/spec. The tool automatically detects the plot type from the
+    stored metadata.
+
+    Args:
+        previous_ref: Reference ID from a previous plot result (12-char hex string).
+        new_code: The complete new code or spec to execute.
+        timeout: Maximum execution time in seconds (default: 60).
+
+    Returns:
+        The previous code for context, new plot results, and a new reference ID.
+        Display images inline with ![description](url).
+    """
+    meta = _lookup_by_ref(previous_ref)
+    if meta is None:
+        return (
+            f"Reference '{previous_ref}' not found. "
+            "It may have expired (outputs are kept for 24 hours) "
+            "or the reference ID may be incorrect."
+        )
+
+    tool_type = meta["tool_type"]
+    previous_code = meta["code"]
+
+    if tool_type == "plotly":
+        result = await run_plot(code=new_code, output_format="both", timeout=timeout)
+        tool_name = "Plotly"
+    elif tool_type == "vegalite":
+        try:
+            json.loads(new_code)
+        except json.JSONDecodeError as e:
+            return f"Invalid JSON in revised spec: {e}"
+        result = await run_vegalite(spec=new_code, output_format="png", timeout=timeout)
+        tool_name = "Vega-Lite"
+    elif tool_type == "observable":
+        result = await run_observable(
+            code=new_code, output_format="png", timeout=timeout
+        )
+        tool_name = "Observable Plot"
+    else:
+        return f"Unknown tool type in stored metadata: {tool_type}"
+
+    new_ref = _compute_ref(new_code)
+    _save_metadata(result.output_dir, tool_type, new_code, new_ref)
+
+    parts = [
+        f"Previous code (ref {previous_ref}):\n```\n{previous_code}\n```\n",
+        _format_result(result, tool_name, ref=new_ref),
+    ]
+    return "\n".join(parts)
 
 
 def main():
