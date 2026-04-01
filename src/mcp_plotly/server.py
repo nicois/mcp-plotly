@@ -57,12 +57,6 @@ class OutputFormat(str, Enum):
     both = "both"
 
 
-class JsOutputFormat(str, Enum):
-    svg = "svg"
-    png = "png"
-    both = "both"
-
-
 def _format_size(size: int) -> str:
     if size < 1024:
         return f"{size} B"
@@ -79,7 +73,6 @@ def _format_result(result: PlotResult, tool_name: str = "Plot") -> str:
         format_names = {
             "png": "PNG image",
             "html": "Interactive HTML",
-            "svg": "SVG image",
         }
         file_lines = []
         for f in result.files:
@@ -145,7 +138,6 @@ async def create_plotly_plot(
 @mcp.tool()
 async def create_vegalite_plot(
     spec: str,
-    output_format: JsOutputFormat = JsOutputFormat.both,
     timeout: int = 60,
 ) -> str:
     """Create a Vega-Lite visualization from a JSON specification.
@@ -154,7 +146,7 @@ async def create_vegalite_plot(
     have an existing Vega-Lite spec or need Vega-Lite-specific features.
 
     Provide a complete Vega-Lite JSON spec as a string. The server compiles
-    it to Vega, renders it, and exports as SVG and/or PNG.
+    it to Vega, renders it, and exports as PNG.
 
     Data must be inline (the container has no network access).
 
@@ -167,15 +159,12 @@ async def create_vegalite_plot(
 
     Args:
         spec: A Vega-Lite specification as a JSON string.
-        output_format: Output format - "svg", "png", or "both" (default: "both").
         timeout: Maximum execution time in seconds (default: 60).
 
     Returns:
         URLs of generated files. Display images inline with ![description](url).
     """
-    logger.info(
-        "Creating Vega-Lite plot (format=%s, timeout=%d)", output_format.value, timeout
-    )
+    logger.info("Creating Vega-Lite plot (timeout=%d)", timeout)
     try:
         json.loads(spec)
     except json.JSONDecodeError as e:
@@ -183,7 +172,7 @@ async def create_vegalite_plot(
 
     result: PlotResult = await run_vegalite(
         spec=spec,
-        output_format=output_format.value,
+        output_format="png",
         timeout=timeout,
     )
     return _format_result(result, "Vega-Lite")
@@ -192,7 +181,6 @@ async def create_vegalite_plot(
 @mcp.tool()
 async def create_observable_plot(
     code: str,
-    output_format: JsOutputFormat = JsOutputFormat.both,
     timeout: int = 60,
 ) -> str:
     """Create an Observable Plot visualization — the DEFAULT and PREFERRED tool for charts.
@@ -202,7 +190,7 @@ async def create_observable_plot(
 
     RULES:
     - The code MUST contain exactly ONE Plot.plot() call as the final expression.
-    - You MUST pass `document` as an option to Plot.plot() for SVG rendering.
+    - You MUST pass `document` as an option to Plot.plot() for rendering.
     - Do NOT include comments in the code.
     - The container has no network access; all data must be inline.
 
@@ -226,18 +214,15 @@ async def create_observable_plot(
 
     Args:
         code: JavaScript code whose final expression is a single Plot.plot({document, ...}) call.
-        output_format: Output format - "svg", "png", or "both" (default: "both").
         timeout: Maximum execution time in seconds (default: 60).
 
     Returns:
         URLs of generated files. Display images inline with ![description](url).
     """
-    logger.info(
-        "Creating Observable plot (format=%s, timeout=%d)", output_format.value, timeout
-    )
+    logger.info("Creating Observable plot (timeout=%d)", timeout)
     result: PlotResult = await run_observable(
         code=code,
-        output_format=output_format.value,
+        output_format="png",
         timeout=timeout,
     )
     return _format_result(result, "Observable Plot")

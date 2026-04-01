@@ -118,8 +118,8 @@ def _js_image_ready():
 
 
 @pytest.mark.asyncio
-async def test_vegalite_svg(_js_image_ready):
-    """Generate a simple Vega-Lite bar chart as SVG."""
+async def test_vegalite_png(_js_image_ready):
+    """Generate a Vega-Lite chart as PNG."""
     import json
 
     spec = json.dumps(
@@ -133,30 +133,6 @@ async def test_vegalite_svg(_js_image_ready):
             },
         }
     )
-    result = await run_vegalite(spec, output_format="svg", timeout=120)
-    assert result.success, f"Vega-Lite failed: {result.stderr}"
-    assert len(result.files) == 1
-    assert result.files[0].endswith(".svg")
-    with open(result.files[0]) as f:
-        assert "<svg" in f.read()
-
-
-@pytest.mark.asyncio
-async def test_vegalite_png(_js_image_ready):
-    """Generate a Vega-Lite chart as PNG."""
-    import json
-
-    spec = json.dumps(
-        {
-            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
-            "data": {"values": [{"x": 1, "y": 2}, {"x": 3, "y": 4}]},
-            "mark": "point",
-            "encoding": {
-                "x": {"field": "x", "type": "quantitative"},
-                "y": {"field": "y", "type": "quantitative"},
-            },
-        }
-    )
     result = await run_vegalite(spec, output_format="png", timeout=120)
     assert result.success, f"Vega-Lite PNG failed: {result.stderr}"
     assert len(result.files) == 1
@@ -164,42 +140,7 @@ async def test_vegalite_png(_js_image_ready):
     assert os.path.getsize(result.files[0]) > 0
 
 
-@pytest.mark.asyncio
-async def test_vegalite_both_formats(_js_image_ready):
-    """Generate Vega-Lite chart in both SVG and PNG."""
-    import json
-
-    spec = json.dumps(
-        {
-            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
-            "data": {"values": [{"a": 1, "b": 2}]},
-            "mark": "bar",
-            "encoding": {
-                "x": {"field": "a", "type": "quantitative"},
-                "y": {"field": "b", "type": "quantitative"},
-            },
-        }
-    )
-    result = await run_vegalite(spec, output_format="both", timeout=120)
-    assert result.success, f"Vega-Lite both failed: {result.stderr}"
-    assert len(result.files) == 2
-    extensions = {os.path.splitext(f)[1] for f in result.files}
-    assert extensions == {".svg", ".png"}
-
-
 # --- Observable Plot tests ---
-
-
-@pytest.mark.asyncio
-async def test_observable_svg(_js_image_ready):
-    """Generate an Observable Plot as SVG."""
-    code = 'Plot.plot({ document, marks: [Plot.dot([{x: 1, y: 2}, {x: 3, y: 4}], {x: "x", y: "y"})] })'
-    result = await run_observable(code, output_format="svg", timeout=120)
-    assert result.success, f"Observable Plot failed: {result.stderr}"
-    assert len(result.files) == 1
-    assert result.files[0].endswith(".svg")
-    with open(result.files[0]) as f:
-        assert "<svg" in f.read().lower()
 
 
 @pytest.mark.asyncio
@@ -219,7 +160,7 @@ async def test_observable_png(_js_image_ready):
 async def test_observable_invalid_code(_js_image_ready):
     """Invalid JS code returns failure."""
     code = "(() => { throw new Error('intentional error'); })()"
-    result = await run_observable(code, output_format="svg", timeout=120)
+    result = await run_observable(code, output_format="png", timeout=120)
     assert not result.success
     assert "intentional error" in result.stderr
 
@@ -230,21 +171,19 @@ async def test_vegalite_invalid_spec(_js_image_ready):
     import json as json_mod
 
     spec = json_mod.dumps({"mark": "nonexistent_type", "data": {"values": []}})
-    result = await run_vegalite(spec, output_format="svg", timeout=120)
+    result = await run_vegalite(spec, output_format="png", timeout=120)
     assert not result.success
 
 
 @pytest.mark.asyncio
 async def test_server_observable_tool(_js_image_ready):
     """End-to-end through the MCP tool handler for Observable Plot."""
-    from mcp_plotly.server import create_observable_plot, JsOutputFormat
+    from mcp_plotly.server import create_observable_plot
 
     code = (
         'Plot.plot({ document, marks: [Plot.dot([{x: 1, y: 2}], {x: "x", y: "y"})] })'
     )
-    result = await create_observable_plot(
-        code=code, output_format=JsOutputFormat.svg, timeout=120
-    )
+    result = await create_observable_plot(code=code, timeout=120)
     assert "Plot generated successfully" in result
     assert "https://test.example.com/plots/" in result
 
@@ -253,7 +192,7 @@ async def test_server_observable_tool(_js_image_ready):
 async def test_server_vegalite_tool(_js_image_ready):
     """End-to-end through the MCP tool handler for Vega-Lite."""
     import json as json_mod
-    from mcp_plotly.server import create_vegalite_plot, JsOutputFormat
+    from mcp_plotly.server import create_vegalite_plot
 
     spec = json_mod.dumps(
         {
@@ -266,8 +205,6 @@ async def test_server_vegalite_tool(_js_image_ready):
             },
         }
     )
-    result = await create_vegalite_plot(
-        spec=spec, output_format=JsOutputFormat.svg, timeout=120
-    )
+    result = await create_vegalite_plot(spec=spec, timeout=120)
     assert "Plot generated successfully" in result
     assert "https://test.example.com/plots/" in result

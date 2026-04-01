@@ -83,14 +83,9 @@ async function execute(request) {
             return { success: false, stdout: '', stderr: 'Unknown type: ' + type };
         }
 
-        if (output_format === 'svg' || output_format === 'both') {
-            writeFileSync(join(outputDir, 'plot.svg'), svg);
-        }
-        if (output_format === 'png' || output_format === 'both') {
-            await sharp(Buffer.from(svg)).png().toFile(
-                join(outputDir, 'plot.png')
-            );
-        }
+        await sharp(Buffer.from(svg)).png().toFile(
+            join(outputDir, 'plot.png')
+        );
 
         return { success: true, stdout: '', stderr: '' };
     } catch (e) {
@@ -129,13 +124,18 @@ function renderObservable(code) {
     const factory = new Function(wrapper);
     const fn = factory();
     const result = fn(Plot, document);
-    if (result && result.outerHTML) {
-        return fixSvg(result.outerHTML);
+    if (!result) {
+        throw new Error(
+            'Code must return an Observable Plot element. '
+            + 'The last expression should be a Plot.plot({document, ...}) call.'
+        );
     }
-    throw new Error(
-        'Code must return an Observable Plot element. '
-        + 'The last expression should be a Plot.plot({document, ...}) call.'
-    );
+    const svg = result.querySelector ? result.querySelector('svg') : null;
+    const el = svg || result;
+    if (!el.outerHTML) {
+        throw new Error('Result has no HTML output. Did Plot.plot() return a valid element?');
+    }
+    return fixSvg(el.outerHTML);
 }
 
 main();
