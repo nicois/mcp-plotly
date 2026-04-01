@@ -270,27 +270,51 @@ async def create_observable_plot(
     return _format_result(result, "Observable Plot", ref=ref)
 
 
+def _apply_patches(code: str, patches: list[list[str]]) -> str:
+    """Apply find/replace patches to code. Each patch is [old, new]."""
+    for patch in patches:
+        if len(patch) != 2:
+            raise ValueError(
+                f"Each patch must be [old, new], got {len(patch)} elements"
+            )
+        old, new = patch
+        if old not in code:
+            raise ValueError(f"Patch target not found in code: {old!r}")
+        code = code.replace(old, new, 1)
+    return code
+
+
 @mcp.tool()
 async def revise_plot(
     previous_ref: str,
-    new_code: str,
+    patches: list[list[str]],
     timeout: int = 60,
 ) -> str:
-    """Revise a previously submitted plot by providing updated code.
+    """Revise a previously submitted plot by patching the original code.
 
-    Use this when you need to fix or modify a plot you already created.
-    Provide the reference ID from a previous plot result and the complete
-    new code/spec. The tool automatically detects the plot type from the
-    stored metadata.
+    Use this instead of re-calling create_observable_plot/create_plotly_plot when
+    fixing errors or making small changes. Provide find/replace pairs to patch
+    the original code — much more token-efficient than resubmitting everything.
+
+    Each patch is a [find, replace] pair applied to the stored code in order.
+    The find string must match exactly (including whitespace).
+
+    Example — fix a typo:
+    patches: [["Plto.plot(", "Plot.plot("]]
+
+    Example — change data and mark type:
+    patches: [
+        ["[{x: 1, y: 2}]", "[{x: 1, y: 2}, {x: 3, y: 4}]"],
+        ["Plot.dot(", "Plot.line("]
+    ]
 
     Args:
         previous_ref: Reference ID from a previous plot result (12-char hex string).
-        new_code: The complete new code or spec to execute.
+        patches: List of [find, replace] pairs to apply to the stored code.
         timeout: Maximum execution time in seconds (default: 60).
 
     Returns:
-        The previous code for context, new plot results, and a new reference ID.
-        Display images inline with ![description](url).
+        URLs of generated files. Display images inline with ![description](url).
     """
     meta = _lookup_by_ref(previous_ref)
     if meta is None:
@@ -301,16 +325,15 @@ async def revise_plot(
         )
 
     tool_type = meta["tool_type"]
-    previous_code = meta["code"]
+    try:
+        new_code = _apply_patches(meta["code"], patches)
+    except ValueError as e:
+        return f"Patch failed: {e}"
 
     if tool_type == "plotly":
         result = await run_plot(code=new_code, output_format="both", timeout=timeout)
         tool_name = "Plotly"
     elif tool_type == "vegalite":
-        try:
-            json.loads(new_code)
-        except json.JSONDecodeError as e:
-            return f"Invalid JSON in revised spec: {e}"
         result = await run_vegalite(spec=new_code, output_format="png", timeout=timeout)
         tool_name = "Vega-Lite"
     elif tool_type == "observable":
@@ -323,12 +346,7 @@ async def revise_plot(
 
     new_ref = _compute_ref(new_code)
     _save_metadata(result.output_dir, tool_type, new_code, new_ref)
-
-    parts = [
-        f"Previous code (ref {previous_ref}):\n```\n{previous_code}\n```\n",
-        _format_result(result, tool_name, ref=new_ref),
-    ]
-    return "\n".join(parts)
+    return _format_result(result, tool_name, ref=new_ref)
 
 
 def main():
